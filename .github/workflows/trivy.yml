@@ -1,0 +1,33 @@
+name: Trivy vulnerability scan
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  trivy:
+    name: Scan ${{ matrix.image }} image
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [db, mcp-server]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build ${{ matrix.image }} image
+        run: docker build -t open-brain-lmstudio-${{ matrix.image }}:scan ./${{ matrix.image }}
+
+      - name: Scan ${{ matrix.image }} image
+        uses: aquasecurity/trivy-action@0.36.0
+        with:
+          image-ref: open-brain-lmstudio-${{ matrix.image }}:scan
+          scan-type: image
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"

@@ -15,8 +15,11 @@ scripts, this README) is MIT-licensed — see `LICENSE`.
 
 ## What you get
 
-- `db`: `pgvector/pgvector:pg16` with a `thoughts` table and a
-  `match_thoughts()` SQL helper.
+- `db`: Postgres 18 + pgvector on Alpine (`db/Dockerfile`, built from
+  `postgres:18-alpine`) with a `thoughts` table and a `match_thoughts()`
+  SQL helper. Built rather than pulled as `pgvector/pgvector:*` — that
+  image has no Alpine variant, and its Debian-based tags carry a large
+  HIGH/CRITICAL CVE count Alpine avoids.
 - `mcp-server`: a Deno/Hono MCP server exposing 4 tools over Streamable
   HTTP at `:8000`, authenticated via an `x-brain-key` header:
   - `capture_thought` — embed + extract metadata + store.
@@ -252,6 +255,36 @@ docker compose start db
 Restore: `docker compose down`, `docker volume rm open-brain-lmstudio_db_data`,
 recreate an empty volume (`docker compose up -d db` then `docker compose stop db`),
 untar the backup into it, `docker compose up -d`.
+
+## Security scanning
+
+Both images are built from scratch (`db/Dockerfile`, `mcp-server/Dockerfile`)
+on Alpine bases specifically because they carry far fewer OS-package CVEs
+than the Debian-based defaults (`pgvector/pgvector:*` has no Alpine variant
+at all, and Debian bookworm/trixie both run well over 90 HIGH/CRITICAL
+findings; the official Deno image's Debian base carries dozens more).
+`db/Dockerfile` also rebuilds the bundled `gosu` binary from source with a
+current Go toolchain rather than using upstream's older prebuilt copy,
+which otherwise carries ~20 Go-stdlib CVEs unrelated to what `gosu`
+actually does at container startup.
+
+[`.github/workflows/trivy.yml`](.github/workflows/trivy.yml) scans both
+images on every PR and push to `main` with
+[Trivy](https://github.com/aquasecurity/trivy-action), failing the check
+on any CRITICAL/HIGH finding with a known fix (`ignore-unfixed: true` —
+findings with no available fix would only ever be noise on a gate like
+this). To run the same scan locally:
+
+```bash
+docker build -t open-brain-lmstudio-db:scan ./db
+docker build -t open-brain-lmstudio-mcp-server:scan ./mcp-server
+docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+  aquasec/trivy:latest image --severity CRITICAL,HIGH --ignore-unfixed \
+  open-brain-lmstudio-db:scan
+docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+  aquasec/trivy:latest image --severity CRITICAL,HIGH --ignore-unfixed \
+  open-brain-lmstudio-mcp-server:scan
+```
 
 ## Troubleshooting
 
