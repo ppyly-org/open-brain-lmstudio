@@ -1,4 +1,8 @@
-FROM denoland/deno:2.3.3
+FROM denoland/deno:alpine-2.9.7
+
+# Picks up any Alpine security patches published after this base image was
+# built, without waiting for denoland to re-push the alpine-2.9.7 tag.
+RUN apk upgrade --no-cache
 
 WORKDIR /app
 
