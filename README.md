@@ -142,16 +142,34 @@ output dimension **before your first `docker compose up`** — see
 
 ## Connecting an MCP client
 
-Point any Streamable-HTTP-capable MCP client at `http://<this-host>:8000`
-with header `x-brain-key: <your MCP_ACCESS_KEY>`. Example (Claude
-Desktop-style config):
+Point any Streamable-HTTP-capable [MCP](https://modelcontextprotocol.io/)
+client at `http://<this-host>:8000` with header
+`x-brain-key: <your MCP_ACCESS_KEY>`. The exact config key for the
+transport type differs by client (`"type": "http"` vs
+`"type": "streamable-http"`) — use the one for your client below.
+
+### Claude Code
+
+Easiest: register it with the CLI (run this once, from anywhere):
+
+```bash
+claude mcp add --transport http open-brain-lmstudio http://<this-host>:8000 \
+  --header "x-brain-key: <your MCP_ACCESS_KEY>"
+```
+
+`--scope user` registers it for every project instead of just the current
+one: `claude mcp add --transport http --scope user open-brain-lmstudio ...`
+
+Equivalent, if you'd rather edit the config file directly — project scope
+goes in `.mcp.json` at your project root, user scope goes under
+`mcpServers` in `~/.claude.json`:
 
 ```json
 {
   "mcpServers": {
     "open-brain-lmstudio": {
-      "url": "http://<this-host>:8000",
       "type": "http",
+      "url": "http://<this-host>:8000",
       "headers": {
         "x-brain-key": "<your MCP_ACCESS_KEY>"
       }
@@ -159,6 +177,30 @@ Desktop-style config):
   }
 }
 ```
+
+### Claude Desktop
+
+Edit the config file directly (Claude Desktop has no CLI for this):
+
+- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
+- Linux: `~/.config/Claude/claude_desktop_config.json`
+
+```json
+{
+  "mcpServers": {
+    "open-brain-lmstudio": {
+      "type": "streamable-http",
+      "url": "http://<this-host>:8000",
+      "headers": {
+        "x-brain-key": "<your MCP_ACCESS_KEY>"
+      }
+    }
+  }
+}
+```
+
+Restart Claude Desktop after editing for the change to take effect.
 
 ## Embedding dimension is a one-way door
 
