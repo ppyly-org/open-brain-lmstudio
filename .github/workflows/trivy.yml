@@ -24,7 +24,7 @@ jobs:
         run: docker build -t open-brain-lmstudio-${{ matrix.image }}:scan ./${{ matrix.image }}
 
       - name: Scan ${{ matrix.image }} image
-        uses: aquasecurity/trivy-action@0.36.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: open-brain-lmstudio-${{ matrix.image }}:scan
           scan-type: image
