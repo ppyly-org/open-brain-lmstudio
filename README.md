@@ -51,6 +51,20 @@ scripts, this README) is MIT-licensed — see `LICENSE`.
    ```
    Each entry's `"id"` field is what goes into this repo's
    `EMBEDDING_MODEL`/`CHAT_MODEL` in Setup step 2 below.
+5. `/v1/models` above lists every downloaded model regardless of whether
+   it's loaded or what kind it is — it is **not** a readiness check.
+   Confirm your embedding model is both loaded and actually classified as
+   an embedding model, via LM Studio's own native API:
+   ```bash
+   curl -s http://localhost:1234/api/v0/models
+   ```
+   Find your `EMBEDDING_MODEL`'s entry and confirm `"type": "embeddings"`
+   and `"state": "loaded"`. If `"type"` comes back `"llm"` instead, LM
+   Studio doesn't recognize that particular download as an embedding
+   model and `/v1/embeddings` will never serve it, no matter how it's
+   (re)loaded — pick a different embedding model or a different
+   source/quant of the same one. See "Recommended models" below for a
+   confirmed-working pick.
 
 ## Recommended models (Apple Silicon, 16-32GB unified memory)
 
@@ -61,7 +75,12 @@ starting point, not a hard requirement.
 - **Embedding: [Qwen3-Embedding-0.6B](https://huggingface.co/Qwen/Qwen3-Embedding-0.6B-GGUF)**
   (MLX build) — native dim **1024**, ~300-600MB, strong multilingual
   quality for its size, 32k context. This repo's `EMBED_DIM` default
-  (1024) matches it.
+  (1024) matches it. **Caveat, confirmed in the field:** some
+  downloads/quants of this model register as LM Studio's generic `"llm"`
+  type rather than `"embeddings"` (see step 5 above) — when that happens
+  `/v1/embeddings` never serves it, regardless of how it's loaded. If
+  that's what you hit, switch to `nomic-embed-text-v1.5` below
+  (`EMBED_DIM=768`), which is confirmed working.
 - **Chat: [Gemma 4 E4B](https://lmstudio.ai/models/google/gemma-4-e4b)**
   (MLX build) — Google's edge release built for agentic workflows with
   native structured JSON output, which matches `capture_thought`'s
@@ -318,3 +337,23 @@ docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
 - **HTTP 401 from the MCP endpoint**: the `x-brain-key` header doesn't
   match `MCP_ACCESS_KEY` in `.env` — re-check what `setup.sh` printed, or
   re-read it with `grep MCP_ACCESS_KEY .env`.
+- **`capture_thought` fails with `Embedding API failed: ... No models
+  loaded` even though `/v1/models` lists your embedding model**:
+  `/v1/models` lists every downloaded model regardless of load state or
+  type — it doesn't mean LM Studio considers it an embedding model. Check
+  LM Studio's native API instead: `curl -s http://localhost:1234/api/v0/models`.
+  If your model's entry shows `"type": "llm"` rather than
+  `"type": "embeddings"`, LM Studio doesn't classify that particular
+  download as embedding-capable and `/v1/embeddings` will never serve it.
+  Switch to a different embedding model/source — see "Recommended models"
+  above.
+- **Every captured thought comes back `topics: ["uncategorized"]`**: this
+  is `extractMetadata`'s fallback for when the chat model's response
+  either fails outright or isn't valid JSON (including JSON wrapped in a
+  ` ```json ` code fence, which some local models still emit even under
+  `response_format: json_object`). Check `docker compose logs mcp-server`
+  around the time of the capture — it now logs the actual HTTP status or
+  raw model output that caused the fallback, rather than swallowing it
+  silently. Common causes: `CHAT_MODEL` doesn't support `response_format:
+  json_object`, or the loaded model just isn't reliable at the requested
+  JSON shape — try a different chat model if the log points there.
