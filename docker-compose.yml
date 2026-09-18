@@ -41,6 +41,17 @@ services:
       - "host.docker.internal:host-gateway"
     ports:
       - "${MCP_PORT:-8000}:8000"
+    healthcheck:
+      # No curl/wget in this image, and the container runs as non-root
+      # USER deno so apt-get can't install one -- deno eval with its
+      # built-in fetch is the tool actually available here. /health is
+      # unauthenticated and pings the db pool, so this also surfaces a
+      # broken Postgres connection, not just "the process is running".
+      test: ["CMD-SHELL", "deno eval 'const r = await fetch(\"http://localhost:8000/health\"); Deno.exit(r.status === 200 ? 0 : 1);' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     depends_on:
       db:
         condition: service_healthy

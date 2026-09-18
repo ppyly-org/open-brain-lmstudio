@@ -106,14 +106,14 @@ output dimension **before your first `docker compose up`** — see
 
 ## Verifying your install
 
-1. Both services running:
+1. Both services healthy:
    ```bash
    docker compose ps
    ```
-   Expect `db` to show `(healthy)` — it has a healthcheck — and
-   `mcp-server` to show `Up` with no health annotation, since it doesn't
-   define one. `mcp-server` not showing "healthy" is expected, not a
-   problem; step 3 below is the real signal that it's actually working.
+   `mcp-server`'s healthcheck hits its own unauthenticated `/health`
+   route, which pings the Postgres pool — so "healthy" here means the
+   server is up *and* can reach the database, not just that the process
+   is running.
 2. Schema present:
    ```bash
    docker compose exec db psql -U postgres -d openbrain -c "\d thoughts"
