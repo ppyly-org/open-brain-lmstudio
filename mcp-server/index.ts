@@ -44,7 +44,7 @@ const DB_NAME = Deno.env.get("DB_NAME") || "openbrain";
 const DB_USER = Deno.env.get("DB_USER") || "postgres";
 const DB_PASSWORD = requireEnv("DB_PASSWORD");
 
-const EMBED_DIM = parseInt(Deno.env.get("EMBED_DIM") || "1024", 10);
+const EMBED_DIM = parseInt(Deno.env.get("EMBED_DIM") || "768", 10);
 
 const EMBEDDING_API_BASE = requireEnv("EMBEDDING_API_BASE");
 const EMBEDDING_API_KEY = Deno.env.get("EMBEDDING_API_KEY") || "lm-studio";

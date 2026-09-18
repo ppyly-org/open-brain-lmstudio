@@ -9,7 +9,7 @@ services:
       POSTGRES_DB: ${DB_NAME:-openbrain}
       POSTGRES_USER: ${DB_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      EMBED_DIM: ${EMBED_DIM:-1024}
+      EMBED_DIM: ${EMBED_DIM:-768}
     volumes:
       # PG18's official image layout changed: it now expects a single mount
       # at /var/lib/postgresql (data lands in a major-version subdirectory
@@ -36,7 +36,7 @@ services:
       DB_NAME: ${DB_NAME:-openbrain}
       DB_USER: ${DB_USER:-postgres}
       DB_PASSWORD: ${POSTGRES_PASSWORD}
-      EMBED_DIM: ${EMBED_DIM:-1024}
+      EMBED_DIM: ${EMBED_DIM:-768}
       EMBEDDING_API_BASE: ${LM_STUDIO_URL:-http://host.docker.internal:1234/v1}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL}
       CHAT_MODEL: ${CHAT_MODEL}
