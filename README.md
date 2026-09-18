@@ -29,8 +29,40 @@ scripts, this README) is MIT-licensed — see `LICENSE`.
 - [LM Studio](https://lmstudio.ai/) running its local server (default port
   `1234`), with **one embedding model and one chat model loaded**. Any
   OpenAI-compatible embedding/chat model LM Studio can serve works — pick
-  based on your hardware.
+  based on your hardware, or use the recommendation below.
 - `openssl` (used by `setup.sh` to generate secrets).
+
+## Recommended models (Apple Silicon, 16-32GB unified memory)
+
+Researched September 2026. If your hardware differs, any OpenAI-compatible
+embedding/chat pair LM Studio can serve works — these are a concrete
+starting point, not a hard requirement.
+
+- **Embedding: [Qwen3-Embedding-0.6B](https://huggingface.co/Qwen/Qwen3-Embedding-0.6B-GGUF)**
+  (MLX build) — native dim **1024**, ~300-600MB, strong multilingual
+  quality for its size, 32k context. This repo's `EMBED_DIM` default
+  (1024) matches it.
+- **Chat: [Gemma 4 E4B](https://lmstudio.ai/models/google/gemma-4-e4b)**
+  (MLX build) — Google's edge release built for agentic workflows with
+  native structured JSON output, which matches `capture_thought`'s
+  metadata-extraction task (people/action_items/dates/topics/type as
+  JSON) better than a general-purpose chat model. ~4.6GB at Q4/5bit.
+
+Combined footprint is well under 6GB — both load simultaneously in LM
+Studio with plenty of headroom even at 16GB. Prefer MLX builds over GGUF
+on Apple Silicon; they're faster and leaner on this hardware.
+
+**Alternatives**, if you want to trade quality/footprint differently:
+- Embedding: `nomic-embed-text-v1.5` (768-dim, ~280MB, smallest possible
+  footprint — set `EMBED_DIM=768` if you use this instead) or
+  `Qwen3-Embedding-4B` (2560-dim, ~4GB, better recall, needs 32GB+).
+- Chat: `Qwen3.5-4B` (~2.5GB, stays in the Qwen family) or `Phi-4-mini`
+  (~2.5GB, smaller fallback) if Gemma 4 E4B's JSON-mode behavior doesn't
+  suit your content.
+
+Whatever you pick, set `EMBED_DIM` to match the embedding model's actual
+output dimension **before your first `docker compose up`** — see
+"Embedding dimension is a one-way door" below.
 
 ## Setup
 
@@ -45,9 +77,10 @@ scripts, this README) is MIT-licensed — see `LICENSE`.
    - `LM_STUDIO_URL` — only if LM Studio runs on a different machine than
      the one running `docker compose up` (default assumes the same
      machine, via `host.docker.internal`).
-   - `EMBED_DIM` — only if your chosen embedding model's output dimension
-     isn't 768. **This is a one-way door once `db`'s volume exists — see
-     below.**
+   - `EMBED_DIM` — defaults to 1024, matching the recommended
+     Qwen3-Embedding-0.6B above. Only change it if your chosen embedding
+     model's output dimension differs. **This is a one-way door once
+     `db`'s volume exists — see below.**
 3. Bring up the stack:
    ```bash
    docker compose up -d
