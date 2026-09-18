@@ -1,10 +1,11 @@
 # CLAUDE.md
 
 Project-local instructions for Claude Code sessions working *on* this repo
-(`open-brain-lmstudio` itself — setup, development, deployment). For
-guidance on how an agent should *use* the deployed MCP server's tools well
-once it's wired into some other project, see `docs/claude-md-snippet.md` —
-that's a different audience (consumer projects of this tool), not this one.
+(`open-brain-lmstudio` itself — setup, development, deployment). Guidance
+on how an agent should *use* the deployed MCP server's tools well (search
+before investigating, capture self-contained thoughts, etc.) belongs in
+the operator's own top-level (global) CLAUDE.md, scoped to them across
+every project — not shipped as a doc in this repo.
 
 ## What this is
 
