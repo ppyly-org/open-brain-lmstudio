@@ -118,7 +118,7 @@ Desktop-style config):
   "mcpServers": {
     "open-brain-lmstudio": {
       "url": "http://<this-host>:8000",
-      "transport": "http",
+      "type": "http",
       "headers": {
         "x-brain-key": "<your MCP_ACCESS_KEY>"
       }

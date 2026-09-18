@@ -5,7 +5,8 @@ Nate B. Jones; integration authored by @velo:
 https://github.com/velo), licensed under the Functional Source License,
 Version 1.1, MIT Future License (FSL-1.1-MIT).
 
-The forked/modified file in this repository is mcp-server/index.ts.
+The forked/modified files in this repository are mcp-server/index.ts,
+mcp-server/Dockerfile, mcp-server/deno.json, and db/init/01-init.sql.template.
 
 The full FSL-1.1-MIT license text, as published by NateBJones-Projects/OB1
 at the time this repository was created (2026-09-18), follows.

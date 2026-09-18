@@ -7,6 +7,7 @@ if [[ ! -f .env ]]; then
   cp .env.example .env
   echo "Created .env from .env.example"
 fi
+chmod 600 .env
 
 generate_secret() {
   openssl rand -base64 32 | tr -d '\n'

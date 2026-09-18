@@ -20,6 +20,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
-NOTE: mcp-server/index.ts is a derivative work of NateBJones-Projects/OB1
-and remains subject to the FSL-1.1-MIT terms reproduced in NOTICE, not this
+NOTE: mcp-server/index.ts, mcp-server/Dockerfile, mcp-server/deno.json, and
+db/init/01-init.sql.template are derivative works of NateBJones-Projects/OB1
+and remain subject to the FSL-1.1-MIT terms reproduced in NOTICE, not this
 MIT license.
