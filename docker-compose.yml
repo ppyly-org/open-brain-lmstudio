@@ -1,0 +1,49 @@
+name: open-brain-lmstudio
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: open-brain-lmstudio-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME:-openbrain}
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      EMBED_DIM: ${EMBED_DIM:-1024}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U ${DB_USER:-postgres} -d ${DB_NAME:-openbrain}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  mcp-server:
+    build: ./mcp-server
+    container_name: open-brain-lmstudio-mcp
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME:-openbrain}
+      DB_USER: ${DB_USER:-postgres}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      EMBED_DIM: ${EMBED_DIM:-1024}
+      EMBEDDING_API_BASE: ${LM_STUDIO_URL:-http://host.docker.internal:1234/v1}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL}
+      CHAT_MODEL: ${CHAT_MODEL}
+      MCP_ACCESS_KEY: ${MCP_ACCESS_KEY}
+      PORT: 8000
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "${MCP_PORT:-8000}:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  db_data:
