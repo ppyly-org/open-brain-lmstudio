@@ -72,15 +72,12 @@ Researched September 2026. If your hardware differs, any OpenAI-compatible
 embedding/chat pair LM Studio can serve works — these are a concrete
 starting point, not a hard requirement.
 
-- **Embedding: [Qwen3-Embedding-0.6B](https://huggingface.co/Qwen/Qwen3-Embedding-0.6B-GGUF)**
-  (MLX build) — native dim **1024**, ~300-600MB, strong multilingual
-  quality for its size, 32k context. This repo's `EMBED_DIM` default
-  (1024) matches it. **Caveat, confirmed in the field:** some
-  downloads/quants of this model register as LM Studio's generic `"llm"`
-  type rather than `"embeddings"` (see step 5 above) — when that happens
-  `/v1/embeddings` never serves it, regardless of how it's loaded. If
-  that's what you hit, switch to `nomic-embed-text-v1.5` below
-  (`EMBED_DIM=768`), which is confirmed working.
+- **Embedding: [nomic-embed-text-v1.5](https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF)**
+  — dim **768**, ~280MB, smallest footprint of the models considered here,
+  8k context. This repo's `EMBED_DIM` default (768) matches it. Confirmed
+  in the field as reliably loadable and correctly classified as
+  `"type": "embeddings"` by LM Studio (see step 5 above) — unlike some
+  downloads of Qwen3-Embedding-0.6B, see "Alternatives" below.
 - **Chat: [Gemma 4 E4B](https://lmstudio.ai/models/google/gemma-4-e4b)**
   (MLX build) — Google's edge release built for agentic workflows with
   native structured JSON output, which matches `capture_thought`'s
@@ -89,12 +86,20 @@ starting point, not a hard requirement.
 
 Combined footprint is well under 6GB — both load simultaneously in LM
 Studio with plenty of headroom even at 16GB. Prefer MLX builds over GGUF
-on Apple Silicon; they're faster and leaner on this hardware.
+on Apple Silicon for the chat model; they're faster and leaner on this
+hardware.
 
 **Alternatives**, if you want to trade quality/footprint differently:
-- Embedding: `nomic-embed-text-v1.5` (768-dim, ~280MB, smallest possible
-  footprint — set `EMBED_DIM=768` if you use this instead) or
-  `Qwen3-Embedding-4B` (2560-dim, ~4GB, better recall, needs 32GB+).
+- Embedding: **[Qwen3-Embedding-0.6B](https://huggingface.co/Qwen/Qwen3-Embedding-0.6B-GGUF)**
+  (MLX build, native dim 1024, set `EMBED_DIM=1024` if you use it) —
+  stronger multilingual quality and longer context (32k) than
+  nomic-embed-text-v1.5. **Caveat, confirmed in the field:** some
+  downloads/quants of this model register as LM Studio's generic `"llm"`
+  type rather than `"embeddings"` — when that happens `/v1/embeddings`
+  never serves it, regardless of how it's (re)loaded. Verify with step 5
+  above before committing to it. Or `Qwen3-Embedding-4B` (2560-dim, ~4GB,
+  better recall, needs 32GB+) once you've confirmed Qwen3 embeddings work
+  on your setup.
 - Chat: `Qwen3.5-4B` (~2.5GB, stays in the Qwen family) or `Phi-4-mini`
   (~2.5GB, smaller fallback) if Gemma 4 E4B's JSON-mode behavior doesn't
   suit your content.
@@ -116,8 +121,8 @@ output dimension **before your first `docker compose up`** — see
    - `LM_STUDIO_URL` — only if LM Studio runs on a different machine than
      the one running `docker compose up` (default assumes the same
      machine, via `host.docker.internal`).
-   - `EMBED_DIM` — defaults to 1024, matching the recommended
-     Qwen3-Embedding-0.6B above. Only change it if your chosen embedding
+   - `EMBED_DIM` — defaults to 768, matching the recommended
+     nomic-embed-text-v1.5 above. Only change it if your chosen embedding
      model's output dimension differs. **This is a one-way door once
      `db`'s volume exists — see below.**
 3. Bring up the stack:
