@@ -160,18 +160,32 @@ untar the backup into it, `docker compose up -d`.
 ## Troubleshooting
 
 - **`mcp-server` exits immediately with `Missing required environment
-  variable: ...`**: one of `DB_PASSWORD`, `EMBEDDING_API_BASE`,
-  `EMBEDDING_MODEL`, `CHAT_MODEL`, `MCP_ACCESS_KEY` is unset — check
-  `.env`, then `docker compose up -d --force-recreate mcp-server`.
+  variable: ...`**: the name in the error is the container-internal
+  variable, not always the `.env` key you need to edit — `docker-compose.yml`
+  derives some of them:
+  - `DB_PASSWORD` comes from `.env`'s `POSTGRES_PASSWORD`.
+  - `EMBEDDING_API_BASE` (and `CHAT_API_BASE`, which defaults to it) come
+    from `.env`'s `LM_STUDIO_URL`; this one has a compose-level default, so
+    it's only reported missing if `.env` itself failed to load.
+  - `EMBEDDING_MODEL`, `CHAT_MODEL`, `MCP_ACCESS_KEY` are literal `.env`
+    keys — no translation needed.
+
+  Check the relevant `.env` key is set, then
+  `docker compose up -d --force-recreate mcp-server`.
 - **`embedding-dim mismatch` on every capture/search**: your
   `EMBEDDING_MODEL` produces a different vector size than `EMBED_DIM`.
   Either pick a model matching the existing `EMBED_DIM`, or follow the
   one-way-door procedure above.
 - **`Embedding API failed: ...` / connection refused**: LM Studio's local
   server isn't running, doesn't have a model loaded, or `LM_STUDIO_URL`
-  doesn't reach it. From inside the container:
-  `docker compose exec mcp-server sh -c 'apt-get -qq install -y curl 2>/dev/null; curl -sv $EMBEDDING_API_BASE/models'`
-  should reach LM Studio's model list.
+  doesn't reach it. The container runs as a non-root `deno` user, so
+  `apt-get install curl` fails with a permission error — check
+  connectivity with `deno eval` instead:
+  ```bash
+  docker compose exec mcp-server deno eval 'try { const r = await fetch(`${Deno.env.get("EMBEDDING_API_BASE")}/models`); console.log(r.status, await r.text()); } catch (e) { console.log("fetch failed:", e.message); }'
+  ```
+  A working LM Studio should print `200` and its model list; a connection
+  failure prints the underlying error instead of a stack trace.
 - **HTTP 401 from the MCP endpoint**: the `x-brain-key` header doesn't
   match `MCP_ACCESS_KEY` in `.env` — re-check what `setup.sh` printed, or
   re-read it with `grep MCP_ACCESS_KEY .env`.
