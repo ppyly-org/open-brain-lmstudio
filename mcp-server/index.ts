@@ -105,6 +105,8 @@ async function getEmbedding(text: string): Promise<number[]> {
 }
 
 async function extractMetadata(text: string): Promise<Record<string, unknown>> {
+  const fallback = { topics: ["uncategorized"], type: "observation" };
+
   const r = await fetch(`${CHAT_API_BASE}/chat/completions`, {
     method: "POST",
     headers: {
@@ -129,11 +131,30 @@ Only extract what's explicitly there.`,
       ],
     }),
   });
+
+  if (!r.ok) {
+    const msg = await r.text().catch(() => "");
+    console.error(`Metadata extraction API failed: ${r.status} ${msg}`);
+    return fallback;
+  }
+
   const d = await r.json();
+  const raw = d.choices?.[0]?.message?.content;
+  if (!raw) {
+    console.error(`Metadata extraction: no message content in chat response: ${JSON.stringify(d)}`);
+    return fallback;
+  }
+
+  // response_format: json_object doesn't guarantee a fence-free reply from
+  // every model -- some still wrap the JSON in a ```json ... ``` block, which
+  // JSON.parse rejects outright. Strip it before parsing rather than losing
+  // real extractions to this every time.
+  const cleaned = raw.trim().replace(/^```(?:json)?\s*|\s*```$/g, "");
   try {
-    return JSON.parse(d.choices[0].message.content);
+    return JSON.parse(cleaned);
   } catch {
-    return { topics: ["uncategorized"], type: "observation" };
+    console.error(`Metadata extraction: model output wasn't valid JSON: ${cleaned}`);
+    return fallback;
   }
 }
 
