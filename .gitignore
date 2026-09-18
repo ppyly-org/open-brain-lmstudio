@@ -1,0 +1,5 @@
+# secrets / local env
+.env
+
+# superpowers specs are local-only, never committed
+docs/superpowers/
