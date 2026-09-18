@@ -235,6 +235,7 @@ function buildServer(): McpServer {
             const m = t.metadata || {};
             const parts = [
               `--- Result ${i + 1} (${(t.similarity * 100).toFixed(1)}% match) ---`,
+              `ID: ${t.id}`,
               `Captured: ${new Date(t.created_at).toLocaleDateString()}`,
               `Type: ${m.type || "unknown"}`,
             ];
@@ -315,11 +316,12 @@ function buildServer(): McpServer {
         const client = await pool.connect();
         try {
           const result = await client.queryObject<{
+            id: string;
             content: string;
             metadata: Record<string, unknown>;
             created_at: string;
           }>(
-            `SELECT content, metadata, created_at
+            `SELECT id, content, metadata, created_at
              FROM thoughts
              ${whereClause}
              ORDER BY created_at DESC
@@ -334,7 +336,7 @@ function buildServer(): McpServer {
           const results = result.rows.map((t, i) => {
             const m = t.metadata || {};
             const tags = Array.isArray(m.topics) ? (m.topics as string[]).join(", ") : "";
-            return `${i + 1}. [${new Date(t.created_at).toLocaleDateString()}] (${m.type || "??"}${tags ? " - " + tags : ""})\n   ${t.content}`;
+            return `${i + 1}. (id ${t.id}) [${new Date(t.created_at).toLocaleDateString()}] (${m.type || "??"}${tags ? " - " + tags : ""})\n   ${t.content}`;
           });
 
           return {
@@ -488,6 +490,111 @@ function buildServer(): McpServer {
         return {
           content: [{ type: "text" as const, text: confirmation }],
         };
+      } catch (err: unknown) {
+        return {
+          content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
+          isError: true,
+        };
+      }
+    }
+  );
+
+  server.registerTool(
+    "update_thought",
+    {
+      title: "Update Thought Metadata",
+      description:
+        "Patch a captured thought's metadata in place -- merges the given fields into its existing metadata (e.g. to fix a wrong type or add a missing topic). Content and embedding are never touched. Use the id shown in search_thoughts/list_thoughts output.",
+      annotations: {
+        readOnlyHint: false,
+        openWorldHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+      },
+      inputSchema: {
+        id: z.string().describe("Thought id, as shown in search_thoughts/list_thoughts output"),
+        metadata: z
+          .record(z.string(), z.unknown())
+          .describe(
+            'Fields to merge into existing metadata, e.g. {"type": "task", "topics": ["homelab"]}. ' +
+              "Only the given keys are changed; anything else already on the thought is left as-is."
+          ),
+      },
+    },
+    async ({ id, metadata }) => {
+      try {
+        const client = await pool.connect();
+        try {
+          const result = await client.queryObject<{ id: string; metadata: Record<string, unknown> }>(
+            `UPDATE thoughts SET metadata = metadata || $2::jsonb WHERE id = $1::bigint RETURNING id, metadata`,
+            [id, JSON.stringify(metadata)]
+          );
+
+          if (!result.rows.length) {
+            return {
+              content: [{ type: "text" as const, text: `No thought found with id ${id}.` }],
+              isError: true,
+            };
+          }
+
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: `Updated thought ${id}. Metadata is now: ${JSON.stringify(result.rows[0].metadata)}`,
+              },
+            ],
+          };
+        } finally {
+          client.release();
+        }
+      } catch (err: unknown) {
+        return {
+          content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
+          isError: true,
+        };
+      }
+    }
+  );
+
+  server.registerTool(
+    "delete_thought",
+    {
+      title: "Delete Thought",
+      description:
+        "Permanently delete a captured thought by id. This cannot be undone. Use the id shown in search_thoughts/list_thoughts output.",
+      annotations: {
+        readOnlyHint: false,
+        openWorldHint: false,
+        destructiveHint: true,
+        idempotentHint: true,
+      },
+      inputSchema: {
+        id: z.string().describe("Thought id, as shown in search_thoughts/list_thoughts output"),
+      },
+    },
+    async ({ id }) => {
+      try {
+        const client = await pool.connect();
+        try {
+          const result = await client.queryObject<{ id: string }>(
+            `DELETE FROM thoughts WHERE id = $1::bigint RETURNING id`,
+            [id]
+          );
+
+          if (!result.rows.length) {
+            return {
+              content: [{ type: "text" as const, text: `No thought found with id ${id} -- nothing deleted.` }],
+              isError: true,
+            };
+          }
+
+          return {
+            content: [{ type: "text" as const, text: `Deleted thought ${id}.` }],
+          };
+        } finally {
+          client.release();
+        }
       } catch (err: unknown) {
         return {
           content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],

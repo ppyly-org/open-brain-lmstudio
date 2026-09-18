@@ -20,12 +20,15 @@ scripts, this README) is MIT-licensed — see `LICENSE`.
   SQL helper. Built rather than pulled as `pgvector/pgvector:*` — that
   image has no Alpine variant, and its Debian-based tags carry a large
   HIGH/CRITICAL CVE count Alpine avoids.
-- `mcp-server`: a Deno/Hono MCP server exposing 4 tools over Streamable
+- `mcp-server`: a Deno/Hono MCP server exposing 6 tools over Streamable
   HTTP at `:8000`, authenticated via an `x-brain-key` header:
   - `capture_thought` — embed + extract metadata + store.
   - `search_thoughts` — semantic search by cosine similarity.
   - `list_thoughts` — filtered/paginated recent listing.
   - `thought_stats` — aggregate counts by type/topic/person.
+  - `update_thought` — patch a thought's metadata in place by id
+    (content/embedding untouched).
+  - `delete_thought` — permanently delete a thought by id.
 
 ## Prerequisites
 
@@ -145,7 +148,7 @@ output dimension **before your first `docker compose up`** — see
    ```bash
    docker compose exec db psql -U postgres -d openbrain -c "\d thoughts"
    ```
-3. Tools list (4 tools, no more, no less):
+3. Tools list (6 tools, no more, no less):
    ```bash
    MCP_KEY="$(grep -E '^MCP_ACCESS_KEY=' .env | cut -d= -f2-)"
    curl -s -X POST http://localhost:8000 \
@@ -176,7 +179,9 @@ output dimension **before your first `docker compose up`** — see
    similarity threshold.
 6. `list_thoughts` and `thought_stats` (same `tools/call` shape, no
    arguments needed beyond the tool name) return sane output against the
-   now-populated `thoughts` table.
+   now-populated `thoughts` table. `list_thoughts`'s output shows each
+   thought's id (`(id N)`) — that id is what `update_thought` and
+   `delete_thought` take as input.
 7. Restart just the server and confirm data survives:
    ```bash
    docker compose restart mcp-server
