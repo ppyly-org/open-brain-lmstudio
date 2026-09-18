@@ -462,6 +462,22 @@ const corsHeaders = {
 
 const app = new Hono();
 
+// Unauthenticated on purpose, like any liveness/readiness endpoint -- it
+// only reports whether Postgres is reachable, no application data.
+app.get("/health", async (c) => {
+  try {
+    const client = await pool.connect();
+    try {
+      await client.queryObject("SELECT 1");
+    } finally {
+      client.release();
+    }
+    return c.text("ok", 200);
+  } catch (err: unknown) {
+    return c.text(`db unreachable: ${(err as Error).message}`, 503);
+  }
+});
+
 app.options("*", (c) => c.text("ok", 200, corsHeaders));
 
 app.all("*", async (c) => {
