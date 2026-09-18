@@ -354,11 +354,13 @@ docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
   above.
 - **Every captured thought comes back `topics: ["uncategorized"]`**: this
   is `extractMetadata`'s fallback for when the chat model's response
-  either fails outright or isn't valid JSON (including JSON wrapped in a
-  ` ```json ` code fence, which some local models still emit even under
-  `response_format: json_object`). Check `docker compose logs mcp-server`
-  around the time of the capture — it now logs the actual HTTP status or
-  raw model output that caused the fallback, rather than swallowing it
-  silently. Common causes: `CHAT_MODEL` doesn't support `response_format:
-  json_object`, or the loaded model just isn't reliable at the requested
-  JSON shape — try a different chat model if the log points there.
+  either fails outright or isn't valid JSON. Check `docker compose logs
+  mcp-server` around the time of the capture — it now logs the actual
+  HTTP status or raw model output that caused the fallback, rather than
+  swallowing it silently. One cause already fixed in this repo: LM
+  Studio's server rejects `response_format: { type: "json_object" }`
+  outright (400, `must be 'json_schema' or 'text'`) — `extractMetadata`
+  now sends `json_schema` instead, matching what LM Studio actually
+  implements. If the log shows a different HTTP status or malformed JSON,
+  the loaded `CHAT_MODEL` likely isn't reliable at the requested schema —
+  try a different chat model.

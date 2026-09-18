@@ -104,6 +104,27 @@ async function getEmbedding(text: string): Promise<number[]> {
   return embedding;
 }
 
+// LM Studio's OpenAI-compatible server rejects response_format: { type:
+// "json_object" } outright (400: "'response_format.type' must be
+// 'json_schema' or 'text'") -- confirmed in the field against
+// google/gemma-4-e4b. json_schema is what LM Studio actually implements
+// for structured output: https://lmstudio.ai/docs/app/api/structured-output
+const METADATA_SCHEMA = {
+  type: "object",
+  properties: {
+    people: { type: "array", items: { type: "string" } },
+    action_items: { type: "array", items: { type: "string" } },
+    dates_mentioned: { type: "array", items: { type: "string" } },
+    topics: { type: "array", items: { type: "string" } },
+    type: {
+      type: "string",
+      enum: ["observation", "task", "idea", "reference", "person_note"],
+    },
+  },
+  required: ["people", "action_items", "dates_mentioned", "topics", "type"],
+  additionalProperties: false,
+};
+
 async function extractMetadata(text: string): Promise<Record<string, unknown>> {
   const fallback = { topics: ["uncategorized"], type: "observation" };
 
@@ -115,7 +136,14 @@ async function extractMetadata(text: string): Promise<Record<string, unknown>> {
     },
     body: JSON.stringify({
       model: CHAT_MODEL,
-      response_format: { type: "json_object" },
+      response_format: {
+        type: "json_schema",
+        json_schema: {
+          name: "thought_metadata",
+          strict: true,
+          schema: METADATA_SCHEMA,
+        },
+      },
       messages: [
         {
           role: "system",
@@ -145,10 +173,9 @@ Only extract what's explicitly there.`,
     return fallback;
   }
 
-  // response_format: json_object doesn't guarantee a fence-free reply from
-  // every model -- some still wrap the JSON in a ```json ... ``` block, which
-  // JSON.parse rejects outright. Strip it before parsing rather than losing
-  // real extractions to this every time.
+  // json_schema mode should return clean JSON directly, but a fence-free
+  // reply isn't guaranteed across every model LM Studio can serve -- keep
+  // the strip as a cheap defensive fallback rather than assuming it's dead.
   const cleaned = raw.trim().replace(/^```(?:json)?\s*|\s*```$/g, "");
   try {
     return JSON.parse(cleaned);
