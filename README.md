@@ -255,6 +255,25 @@ Edit the config file directly (Claude Desktop has no CLI for this):
 
 Restart Claude Desktop after editing for the change to take effect.
 
+## Using it well
+
+Having the MCP server wired up doesn't mean an agent will use it well by
+default. The failure mode found in the field: thoughts get captured that
+only make sense within the session that wrote them — no grounding on what
+the project even was, acronyms left unexplained, references to "earlier in
+this conversation." Since the entire point is reuse by unrelated future
+sessions, that context has to live in the thought itself, or it's dead
+weight the moment the session ends.
+
+[`docs/claude-md-snippet.md`](docs/claude-md-snippet.md) has a ready-to-copy
+section covering this: search before investigating, capture after
+non-trivial work, and the self-containment rule (a thought must make sense
+to a reader with zero shared context, in a completely unrelated project,
+months from now). It's scoped to you as an operator, not to any one
+project — copy it into your own CLAUDE.md wherever you keep it; a
+top-level/global one is suggested, since the guidance applies everywhere
+you use this MCP server, not just one repo.
+
 ## Embedding dimension is a one-way door
 
 `EMBED_DIM` is baked into the `thoughts.embedding` column when the `db`
