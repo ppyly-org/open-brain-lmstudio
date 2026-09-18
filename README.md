@@ -1,10 +1,11 @@
 # open-brain-lmstudio
 
-Self-hosted Open Brain MCP server — capture and semantically search personal
-notes — backed by Docker Compose and a local [LM Studio](https://lmstudio.ai/)
-instance for embeddings and metadata extraction. No cloud API keys. No
-ingestion/scraping jobs. Two containers total: Postgres+pgvector, and the
-MCP server.
+Self-hosted Open Brain [MCP](https://modelcontextprotocol.io/) server —
+capture and semantically search personal notes from any MCP-capable AI
+client (Claude Code, Claude Desktop, etc.) — backed by Docker Compose and
+a local [LM Studio](https://lmstudio.ai/) instance for embeddings and
+metadata extraction. No cloud API keys. No ingestion/scraping jobs. Two
+containers total: Postgres+pgvector, and the MCP server.
 
 Forked from [NateBJones-Projects/OB1](https://github.com/NateBJones-Projects/OB1)'s
 `integrations/kubernetes-deployment` (community contribution by
@@ -31,6 +32,22 @@ scripts, this README) is MIT-licensed — see `LICENSE`.
   OpenAI-compatible embedding/chat model LM Studio can serve works — pick
   based on your hardware, or use the recommendation below.
 - `openssl` (used by `setup.sh` to generate secrets).
+
+### First time using LM Studio? Quick setup
+
+1. Install LM Studio and, in its "Discover"/search tab, download an
+   embedding model and a chat model (see "Recommended models" below for
+   concrete picks).
+2. Open the **Developer** tab in LM Studio's sidebar and load both
+   models.
+3. In the same tab, toggle **Start server** (default port `1234`).
+4. Get the exact identifier string each model expects in API calls —
+   don't guess it from the display name, confirm it:
+   ```bash
+   curl -s http://localhost:1234/v1/models
+   ```
+   Each entry's `"id"` field is what goes into this repo's
+   `EMBEDDING_MODEL`/`CHAT_MODEL` in Setup step 2 below.
 
 ## Recommended models (Apple Silicon, 16-32GB unified memory)
 
@@ -89,10 +106,14 @@ output dimension **before your first `docker compose up`** — see
 
 ## Verifying your install
 
-1. Both services healthy:
+1. Both services running:
    ```bash
    docker compose ps
    ```
+   Expect `db` to show `(healthy)` — it has a healthcheck — and
+   `mcp-server` to show `Up` with no health annotation, since it doesn't
+   define one. `mcp-server` not showing "healthy" is expected, not a
+   problem; step 3 below is the real signal that it's actually working.
 2. Schema present:
    ```bash
    docker compose exec db psql -U postgres -d openbrain -c "\d thoughts"
