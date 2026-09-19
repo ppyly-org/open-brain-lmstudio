@@ -120,8 +120,20 @@ const METADATA_SCHEMA = {
       type: "string",
       enum: ["observation", "task", "idea", "reference", "person_note"],
     },
+    entities: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          name: { type: "string" },
+          type: { type: "string" },
+        },
+        required: ["name", "type"],
+        additionalProperties: false,
+      },
+    },
   },
-  required: ["people", "action_items", "dates_mentioned", "topics", "type"],
+  required: ["people", "action_items", "dates_mentioned", "topics", "type", "entities"],
   additionalProperties: false,
 };
 
@@ -153,6 +165,7 @@ async function extractMetadata(text: string): Promise<Record<string, unknown>> {
 - "dates_mentioned": array of dates YYYY-MM-DD (empty if none)
 - "topics": array of 1-3 short topic tags (always at least one)
 - "type": one of "observation", "task", "idea", "reference", "person_note"
+- "entities": array of {name, type} for distinct people/projects/tools/organizations/concepts mentioned (empty if none). "type" is a short freeform label you choose (e.g. "person", "project", "tool") -- not a fixed list.
 Only extract what's explicitly there.`,
         },
         { role: "user", content: text },
@@ -182,6 +195,200 @@ Only extract what's explicitly there.`,
   } catch {
     console.error(`Metadata extraction: model output wasn't valid JSON: ${cleaned}`);
     return fallback;
+  }
+}
+
+// --- Connection Graph & Entity Helpers ---
+
+type DbClient = Awaited<ReturnType<typeof pool.connect>>;
+
+const DEDUP_THRESHOLD = 0.9;
+const CONNECTION_THRESHOLD = 0.75;
+const CONNECTION_CANDIDATE_LIMIT = 5;
+
+const CONNECTION_TYPES = ["extends", "contradicts", "is-evidence-for", "supersedes", "related"] as const;
+
+const CONNECTION_SCHEMA = {
+  type: "object",
+  properties: {
+    classifications: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          candidate_id: { type: "string" },
+          link_type: { type: "string", enum: [...CONNECTION_TYPES] },
+        },
+        required: ["candidate_id", "link_type"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["classifications"],
+  additionalProperties: false,
+};
+
+async function checkDedup(
+  client: DbClient,
+  embStr: string
+): Promise<{ id: string; content: string; similarity: number } | null> {
+  const result = await client.queryObject<{ id: string; content: string; similarity: number }>(
+    `SELECT id, content, 1 - (embedding <=> $1::vector) AS similarity
+     FROM thoughts
+     ORDER BY embedding <=> $1::vector
+     LIMIT 1`,
+    [embStr]
+  );
+  const top = result.rows[0];
+  if (top && top.similarity >= DEDUP_THRESHOLD) return top;
+  return null;
+}
+
+async function storeConnections(
+  client: DbClient,
+  newThoughtId: string,
+  newContent: string,
+  embStr: string
+): Promise<void> {
+  const candidates = await client.queryObject<{ id: string; content: string; similarity: number }>(
+    `SELECT id, content, 1 - (embedding <=> $1::vector) AS similarity
+     FROM thoughts
+     WHERE id != $2::bigint AND 1 - (embedding <=> $1::vector) >= $3
+     ORDER BY embedding <=> $1::vector
+     LIMIT $4`,
+    [embStr, newThoughtId, CONNECTION_THRESHOLD, CONNECTION_CANDIDATE_LIMIT]
+  );
+
+  if (!candidates.rows.length) return;
+
+  const r = await fetch(`${CHAT_API_BASE}/chat/completions`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${CHAT_API_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: CHAT_MODEL,
+      response_format: {
+        type: "json_schema",
+        json_schema: { name: "connection_types", strict: true, schema: CONNECTION_SCHEMA },
+      },
+      messages: [
+        {
+          role: "system",
+          content: `Classify the relationship between a NEW thought and each CANDIDATE thought. For each candidate, pick exactly one type: "extends" (new thought adds detail/context to the candidate), "contradicts" (new thought disagrees with or reverses the candidate), "is-evidence-for" (new thought supports/confirms the candidate), "supersedes" (new thought replaces/obsoletes the candidate), or "related" (topically connected but none of the above fit). Return exactly one classification per candidate_id given.`,
+        },
+        {
+          role: "user",
+          content: JSON.stringify({
+            new_thought: newContent,
+            candidates: candidates.rows.map((c) => ({ candidate_id: c.id, content: c.content })),
+          }),
+        },
+      ],
+    }),
+  });
+
+  if (!r.ok) {
+    const msg = await r.text().catch(() => "");
+    console.error(`Connection typing API failed: ${r.status} ${msg}`);
+    return;
+  }
+
+  const d = await r.json();
+  const raw = d.choices?.[0]?.message?.content;
+  if (!raw) {
+    console.error(`Connection typing: no message content in chat response: ${JSON.stringify(d)}`);
+    return;
+  }
+
+  const cleaned = raw.trim().replace(/^```(?:json)?\s*|\s*```$/g, "");
+  let parsed: { classifications: { candidate_id: string; link_type: string }[] };
+  try {
+    parsed = JSON.parse(cleaned);
+  } catch {
+    console.error(`Connection typing: model output wasn't valid JSON: ${cleaned}`);
+    return;
+  }
+
+  const bySimilarity = new Map(candidates.rows.map((c) => [c.id, c.similarity]));
+  for (const cl of parsed.classifications ?? []) {
+    const similarity = bySimilarity.get(cl.candidate_id);
+    if (similarity === undefined) continue; // model referenced an id not in the candidate set -- skip rather than guess
+    await client.queryObject(
+      `INSERT INTO thought_connections (source_thought_id, target_thought_id, similarity, link_type)
+       VALUES ($1::bigint, $2::bigint, $3, $4)
+       ON CONFLICT (source_thought_id, target_thought_id) DO NOTHING`,
+      [newThoughtId, cl.candidate_id, similarity, cl.link_type]
+    );
+  }
+}
+
+async function resolveEntities(
+  client: DbClient,
+  thoughtId: string,
+  entities: { name: string; type?: string }[]
+): Promise<string[]> {
+  const entityIds: string[] = [];
+  for (const e of entities) {
+    const name = e.name?.trim();
+    if (!name) continue;
+
+    const existing = await client.queryObject<{ id: string }>(
+      `SELECT id FROM entities WHERE lower(name) = lower($1)`,
+      [name]
+    );
+
+    let entityId: string;
+    if (existing.rows.length) {
+      entityId = existing.rows[0].id;
+      await client.queryObject(
+        `UPDATE entities SET mention_count = mention_count + 1, last_seen_at = now() WHERE id = $1::bigint`,
+        [entityId]
+      );
+    } else {
+      const inserted = await client.queryObject<{ id: string }>(
+        `INSERT INTO entities (name, type) VALUES ($1, $2) RETURNING id`,
+        [name, e.type ?? null]
+      );
+      entityId = inserted.rows[0].id;
+    }
+
+    await client.queryObject(
+      `INSERT INTO thought_entities (thought_id, entity_id) VALUES ($1::bigint, $2::bigint)
+       ON CONFLICT (thought_id, entity_id) DO NOTHING`,
+      [thoughtId, entityId]
+    );
+    entityIds.push(entityId);
+  }
+  return entityIds;
+}
+
+async function storeEntityBridges(
+  client: DbClient,
+  thoughtId: string,
+  entityIds: string[],
+  embStr: string
+): Promise<void> {
+  if (entityIds.length < 2) return; // need >=2 shared entities to count as a bridge, per spec
+
+  const bridges = await client.queryObject<{ other_thought_id: string }>(
+    `SELECT te.thought_id AS other_thought_id
+     FROM thought_entities te
+     WHERE te.entity_id = ANY($1::bigint[]) AND te.thought_id != $2::bigint
+     GROUP BY te.thought_id
+     HAVING COUNT(*) >= 2`,
+    [entityIds, thoughtId]
+  );
+
+  for (const b of bridges.rows) {
+    await client.queryObject(
+      `INSERT INTO thought_connections (source_thought_id, target_thought_id, similarity, link_type)
+       SELECT $1::bigint, $2::bigint, 1 - (embedding <=> $3::vector), 'shares_entities'
+       FROM thoughts WHERE id = $2::bigint
+       ON CONFLICT (source_thought_id, target_thought_id) DO NOTHING`,
+      [thoughtId, b.other_thought_id, embStr]
+    );
   }
 }
 
@@ -447,7 +654,8 @@ function buildServer(): McpServer {
     {
       title: "Capture Thought",
       description:
-        "Save a new thought to the Open Brain. Generates an embedding and extracts metadata automatically.",
+        "Save a new thought to the Open Brain. Generates an embedding and extracts metadata automatically. " +
+        "If this returns a duplicate-skip notice, delegate the decision to a fresh Haiku subagent: hand it the new content and the flagged existing thought, and have it decide (amend the existing one via update_thought, or force-recapture) from that evidence alone. If the evidence doesn't clearly favor one option, ask the user rather than guessing.",
       annotations: {
         readOnlyHint: false,
         openWorldHint: false,
@@ -456,9 +664,16 @@ function buildServer(): McpServer {
       },
       inputSchema: {
         content: z.string().describe("The thought to capture"),
+        force: z
+          .boolean()
+          .optional()
+          .default(false)
+          .describe(
+            "Skip the duplicate check and capture unconditionally, even if a near-identical thought already exists."
+          ),
       },
     },
-    async ({ content }) => {
+    async ({ content, force }) => {
       try {
         const [embedding, metadata] = await Promise.all([
           getEmbedding(content),
@@ -466,30 +681,65 @@ function buildServer(): McpServer {
         ]);
 
         const embStr = `[${embedding.join(",")}]`;
-        const meta: Record<string, unknown> = { ...metadata, source: "mcp" };
 
         const client = await pool.connect();
         try {
-          await client.queryObject(
+          if (!force) {
+            const dup = await checkDedup(client, embStr);
+            if (dup) {
+              const excerpt = dup.content.length > 120 ? dup.content.slice(0, 120) + "..." : dup.content;
+              return {
+                content: [
+                  {
+                    type: "text" as const,
+                    text: `Skipped -- nearly identical to thought #${dup.id} (${(dup.similarity * 100).toFixed(1)}% similar): "${excerpt}". Call update_thought on #${dup.id} to amend it, or capture_thought again with force: true to capture as a new entry anyway.`,
+                  },
+                ],
+              };
+            }
+          }
+
+          const meta: Record<string, unknown> = { ...metadata, source: "mcp" };
+          const entities = Array.isArray(meta.entities)
+            ? (meta.entities as { name: string; type?: string }[])
+            : [];
+          delete meta.entities; // stored relationally (thought_entities), not duplicated into metadata jsonb
+
+          const inserted = await client.queryObject<{ id: string }>(
             `INSERT INTO thoughts (content, embedding, metadata)
-             VALUES ($1, $2::vector, $3::jsonb)`,
+             VALUES ($1, $2::vector, $3::jsonb)
+             RETURNING id`,
             [content, embStr, JSON.stringify(meta)]
           );
+          const newId = inserted.rows[0].id;
+
+          // Graph enrichment must never turn a successful insert into a
+          // reported failure -- a hiccup here is much lower-stakes than a
+          // false "your capture failed" message.
+          try {
+            await storeConnections(client, newId, content, embStr);
+            const entityIds = await resolveEntities(client, newId, entities);
+            await storeEntityBridges(client, newId, entityIds, embStr);
+          } catch (graphErr: unknown) {
+            console.error(
+              `Graph enrichment failed for thought ${newId} (capture itself succeeded): ${(graphErr as Error).message}`
+            );
+          }
+
+          let confirmation = `Captured as ${meta.type || "thought"}`;
+          if (Array.isArray(meta.topics) && meta.topics.length)
+            confirmation += ` -- ${(meta.topics as string[]).join(", ")}`;
+          if (Array.isArray(meta.people) && meta.people.length)
+            confirmation += ` | People: ${(meta.people as string[]).join(", ")}`;
+          if (Array.isArray(meta.action_items) && meta.action_items.length)
+            confirmation += ` | Actions: ${(meta.action_items as string[]).join("; ")}`;
+
+          return {
+            content: [{ type: "text" as const, text: confirmation }],
+          };
         } finally {
           client.release();
         }
-
-        let confirmation = `Captured as ${meta.type || "thought"}`;
-        if (Array.isArray(meta.topics) && meta.topics.length)
-          confirmation += ` -- ${(meta.topics as string[]).join(", ")}`;
-        if (Array.isArray(meta.people) && meta.people.length)
-          confirmation += ` | People: ${(meta.people as string[]).join(", ")}`;
-        if (Array.isArray(meta.action_items) && meta.action_items.length)
-          confirmation += ` | Actions: ${(meta.action_items as string[]).join("; ")}`;
-
-        return {
-          content: [{ type: "text" as const, text: confirmation }],
-        };
       } catch (err: unknown) {
         return {
           content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
