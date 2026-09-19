@@ -25,7 +25,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPTransport } from "@hono/mcp";
 import { Hono } from "hono";
 import { z } from "zod";
-import { Pool } from "postgres";
+import { Pool, Oid } from "postgres";
 
 // --- Configuration ---
 
@@ -64,6 +64,7 @@ const pool = new Pool({
   database: DB_NAME,
   user: DB_USER,
   password: DB_PASSWORD,
+  controls: { decoders: { [Oid.int8]: (value: string) => value } },
 }, 20);
 
 type ThoughtMatch = {
