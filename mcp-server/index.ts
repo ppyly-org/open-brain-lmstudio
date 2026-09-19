@@ -992,6 +992,139 @@ function buildServer(): McpServer {
     }
   );
 
+  server.registerTool(
+    "review_stale",
+    {
+      title: "Review Stale Thoughts",
+      description:
+        "List old, weakly-connected thoughts that may be worth cleaning up. " +
+        "Delegate judgment to a fresh Haiku subagent per candidate: decide keep, update, or delete from the content and connection count alone. If the evidence doesn't clearly support an action, ask the user before deleting or amending anything.",
+      annotations: {
+        readOnlyHint: true,
+      },
+      inputSchema: {
+        days: z.number().optional().default(90).describe("Only thoughts older than this many days"),
+        max_connections: z.number().optional().default(1).describe("Only thoughts with fewer than this many connections"),
+        limit: z.number().optional().default(20),
+      },
+    },
+    async ({ days, max_connections, limit }) => {
+      try {
+        const client = await pool.connect();
+        try {
+          const result = await client.queryObject<{
+            id: string;
+            content: string;
+            created_at: string;
+            connection_count: number;
+          }>(
+            `SELECT t.id, t.content, t.created_at, COUNT(c.id)::int AS connection_count
+             FROM thoughts t
+             LEFT JOIN thought_connections c ON c.source_thought_id = t.id OR c.target_thought_id = t.id
+             WHERE t.created_at < now() - make_interval(days => $1::int)
+             GROUP BY t.id, t.content, t.created_at
+             HAVING COUNT(c.id) < $2
+             ORDER BY t.created_at ASC
+             LIMIT $3`,
+            [days, max_connections, limit]
+          );
+
+          if (!result.rows.length) {
+            return {
+              content: [
+                {
+                  type: "text" as const,
+                  text: `No stale thoughts found (older than ${days} days, fewer than ${max_connections} connections).`,
+                },
+              ],
+            };
+          }
+
+          const lines = result.rows.map(
+            (t, i) =>
+              `${i + 1}. (id ${t.id}) captured ${new Date(t.created_at).toLocaleDateString()}, ${t.connection_count} connection(s)\n   ${t.content}`
+          );
+
+          return {
+            content: [
+              { type: "text" as const, text: `${result.rows.length} stale candidate(s):\n\n${lines.join("\n\n")}` },
+            ],
+          };
+        } finally {
+          client.release();
+        }
+      } catch (err: unknown) {
+        return {
+          content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
+          isError: true,
+        };
+      }
+    }
+  );
+
+  server.registerTool(
+    "dedup_review",
+    {
+      title: "Dedup Review",
+      description:
+        "Scan existing thoughts for pairs that may be duplicates but weren't caught at capture time (similarity between 75% and 90% -- below the auto-flag threshold, above merely related). " +
+        "Delegate judgment to a fresh Haiku subagent per candidate pair: it should decide duplicate or not duplicate from the two contents and similarity score alone. If a pair's evidence is ambiguous, ask the user rather than guessing.",
+      annotations: {
+        readOnlyHint: true,
+      },
+      inputSchema: {
+        days: z.number().optional().describe("Only scan thoughts captured in the last N days (omit to scan everything)"),
+        limit: z.number().optional().default(20),
+      },
+    },
+    async ({ days, limit }) => {
+      try {
+        const client = await pool.connect();
+        try {
+          const result = await client.queryObject<{
+            id_a: string;
+            content_a: string;
+            id_b: string;
+            content_b: string;
+            similarity: number;
+          }>(
+            `SELECT a.id AS id_a, a.content AS content_a, b.id AS id_b, b.content AS content_b,
+                    1 - (a.embedding <=> b.embedding) AS similarity
+             FROM thoughts a
+             JOIN thoughts b ON b.id > a.id
+             WHERE 1 - (a.embedding <=> b.embedding) BETWEEN 0.75 AND 0.90
+               AND ($1::int IS NULL OR a.created_at > now() - make_interval(days => $1::int))
+             ORDER BY similarity DESC
+             LIMIT $2`,
+            [days ?? null, limit]
+          );
+
+          if (!result.rows.length) {
+            return { content: [{ type: "text" as const, text: "No possible-duplicate pairs found in that range." }] };
+          }
+
+          const lines = result.rows.map(
+            (r, i) =>
+              `${i + 1}. (${(r.similarity * 100).toFixed(1)}% similar) #${r.id_a} vs #${r.id_b}\n   A: ${r.content_a}\n   B: ${r.content_b}`
+          );
+
+          return {
+            content: [
+              { type: "text" as const, text: `${result.rows.length} possible duplicate pair(s):\n\n${lines.join("\n\n")}` },
+            ],
+          };
+        } finally {
+          client.release();
+        }
+      } catch (err: unknown) {
+        return {
+          content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
+          isError: true,
+        };
+      }
+    }
+  );
+
   return server;
 }
 
