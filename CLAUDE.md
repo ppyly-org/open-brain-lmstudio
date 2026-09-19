@@ -120,6 +120,19 @@ both can pass while the actual feature is broken.
   error. Use `deno eval` with its built-in `fetch` for any in-container
   connectivity check (see the README's Troubleshooting section for the
   exact one-liner).
+- **`thought_connections.source_thought_id` is always the newer
+  thought.** Every row is created during a `capture_thought` call,
+  searching among strictly older existing thoughts — `source` is always
+  the thought being captured, `target` is always the pre-existing one.
+  `serendipity_digest`'s recent-echo slot and any future
+  connection-direction logic depends on this holding. Don't create a
+  `thought_connections` row from anywhere else without preserving it.
+- **Entity name matching is case-insensitive at lookup time only**
+  (`WHERE lower(name) = lower($1)` in `resolveEntities`), not enforced
+  by a DB constraint — `entities.name`'s `UNIQUE` constraint is
+  case-sensitive. First-seen casing wins for display. A citext extension
+  would enforce this at the DB level but isn't used here to avoid an
+  extra extension dependency for a single-user-scale edge case.
 
 ## Conventions
 

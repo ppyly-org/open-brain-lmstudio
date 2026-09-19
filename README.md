@@ -20,15 +20,26 @@ scripts, this README) is MIT-licensed — see `LICENSE`.
   SQL helper. Built rather than pulled as `pgvector/pgvector:*` — that
   image has no Alpine variant, and its Debian-based tags carry a large
   HIGH/CRITICAL CVE count Alpine avoids.
-- `mcp-server`: a Deno/Hono MCP server exposing 6 tools over Streamable
+- `mcp-server`: a Deno/Hono MCP server exposing 13 tools over Streamable
   HTTP at `:8000`, authenticated via an `x-brain-key` header:
-  - `capture_thought` — embed + extract metadata + store.
+  - `capture_thought` — embed + extract metadata + store. Also checks
+    for near-duplicates, stores typed connections to related thoughts,
+    and extracts/links entities.
   - `search_thoughts` — semantic search by cosine similarity.
   - `list_thoughts` — filtered/paginated recent listing.
   - `thought_stats` — aggregate counts by type/topic/person.
   - `update_thought` — patch a thought's metadata in place by id
     (content/embedding untouched).
   - `delete_thought` — permanently delete a thought by id.
+  - `get_connections` — show a thought's typed connections to others.
+  - `list_entities` — browse tracked entities by mention frequency.
+  - `review_stale` — list old, weakly-connected thoughts for cleanup.
+  - `dedup_review` — scan for possible duplicates missed at capture time.
+  - `serendipity_digest` — surface rediscovered/orphaned/echoing thoughts.
+  - `weekly_review` — raw activity data for a time window (agent
+    synthesizes the narrative).
+  - `analyze` — live connection-graph stats (hubs, link types, top
+    entities).
 
 ## Prerequisites
 
@@ -148,7 +159,7 @@ output dimension **before your first `docker compose up`** — see
    ```bash
    docker compose exec db psql -U postgres -d openbrain -c "\d thoughts"
    ```
-3. Tools list (6 tools, no more, no less):
+3. Tools list (13 tools, no more, no less):
    ```bash
    MCP_KEY="$(grep -E '^MCP_ACCESS_KEY=' .env | cut -d= -f2-)"
    curl -s -X POST http://localhost:8000 \
@@ -388,3 +399,21 @@ docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
   implements. If the log shows a different HTTP status or malformed JSON,
   the loaded `CHAT_MODEL` likely isn't reliable at the requested schema —
   try a different chat model.
+- **`capture_thought` returns `Skipped -- nearly identical to thought
+  #N...` for content that isn't actually a duplicate**: the dedup
+  threshold (90% cosine similarity) is a reasoned default, not
+  empirically tuned — some genuinely distinct thoughts phrased very
+  similarly can trip it. Call `capture_thought` again with `force: true`
+  to capture it anyway; there's no `.env` setting for this threshold
+  currently (see `CLAUDE.md`'s gotchas if you need to change the
+  constant in code).
+- **`list_entities` shows what looks like the same entity twice with
+  different casing** (e.g. "Docker" and "docker" as separate rows):
+  entity name matching is case-insensitive at *lookup* time
+  (`lower(name) = lower($1)`), but if two different capture calls
+  happened to race (concurrent inserts before either committed), both
+  could pass the lookup and insert separately since `entities.name` is
+  only unique case-*sensitively* at the DB level. Rare in a
+  single-user/personal-scale deployment; merge manually via `psql` if it
+  happens (`UPDATE thought_entities SET entity_id = <keeper> WHERE
+  entity_id = <duplicate>`, then delete the duplicate `entities` row).
