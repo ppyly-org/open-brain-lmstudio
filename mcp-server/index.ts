@@ -64,6 +64,7 @@ const pool = new Pool({
   database: DB_NAME,
   user: DB_USER,
   password: DB_PASSWORD,
+  // Forces int8/bigint columns to decode as string (driver default is native BigInt) -- every id: string in this file depends on this. See CLAUDE.md.
   controls: { decoders: { [Oid.int8]: (value: string) => value } },
 }, 20);
 
@@ -88,6 +89,7 @@ async function getEmbedding(text: string): Promise<number[]> {
       model: EMBEDDING_MODEL,
       input: text,
     }),
+    signal: AbortSignal.timeout(30000),
   });
   if (!r.ok) {
     const msg = await r.text().catch(() => "");
@@ -172,6 +174,7 @@ Only extract what's explicitly there.`,
         { role: "user", content: text },
       ],
     }),
+    signal: AbortSignal.timeout(30000),
   });
 
   if (!r.ok) {
@@ -288,6 +291,7 @@ async function storeConnections(
         },
       ],
     }),
+    signal: AbortSignal.timeout(30000),
   });
 
   if (!r.ok) {
@@ -349,7 +353,9 @@ async function resolveEntities(
       );
     } else {
       const inserted = await client.queryObject<{ id: string }>(
-        `INSERT INTO entities (name, type) VALUES ($1, $2) RETURNING id`,
+        `INSERT INTO entities (name, type) VALUES ($1, $2)
+         ON CONFLICT (name) DO UPDATE SET mention_count = entities.mention_count + 1, last_seen_at = now()
+         RETURNING id`,
         [name, e.type ?? null]
       );
       entityId = inserted.rows[0].id;
