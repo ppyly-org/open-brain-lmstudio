@@ -1125,6 +1125,298 @@ function buildServer(): McpServer {
     }
   );
 
+  server.registerTool(
+    "serendipity_digest",
+    {
+      title: "Serendipity Digest",
+      description:
+        "Surface a few potentially interesting thoughts: one rediscovered (old, weakly connected), one orphaned (zero connections), one recent echo (a recent thought connected to something much older). " +
+        "Delegate the write-up to a fresh Haiku subagent: give it the raw data and have it write the framing. If it can't tell why a slot is interesting from the data alone, say so plainly rather than inventing a narrative.",
+      annotations: {
+        readOnlyHint: true,
+      },
+      inputSchema: {},
+    },
+    async () => {
+      try {
+        const client = await pool.connect();
+        try {
+          const rediscovery = await client.queryObject<{ id: string; content: string; created_at: string }>(
+            `SELECT t.id, t.content, t.created_at
+             FROM thoughts t
+             LEFT JOIN thought_connections c ON c.source_thought_id = t.id OR c.target_thought_id = t.id
+             WHERE t.created_at < now() - make_interval(days => 30)
+             GROUP BY t.id, t.content, t.created_at
+             HAVING COUNT(c.id) <= 1
+             ORDER BY random()
+             LIMIT 1`
+          );
+
+          const orphan = await client.queryObject<{ id: string; content: string; created_at: string }>(
+            `SELECT t.id, t.content, t.created_at
+             FROM thoughts t
+             WHERE NOT EXISTS (
+               SELECT 1 FROM thought_connections c
+               WHERE c.source_thought_id = t.id OR c.target_thought_id = t.id
+             )
+             ORDER BY random()
+             LIMIT 1`
+          );
+
+          // Relies on the directionality invariant (see plan Global
+          // Constraints): source_thought_id is always the newer thought
+          // in a connection row, so "new connects to something 30+ days
+          // older" is a direct filter, not a computed direction.
+          const recentEcho = await client.queryObject<{
+            new_id: string;
+            new_content: string;
+            old_id: string;
+            old_content: string;
+            days_apart: number;
+          }>(
+            `SELECT nt.id AS new_id, nt.content AS new_content, ot.id AS old_id, ot.content AS old_content,
+                    EXTRACT(DAY FROM nt.created_at - ot.created_at)::int AS days_apart
+             FROM thought_connections c
+             JOIN thoughts nt ON nt.id = c.source_thought_id
+             JOIN thoughts ot ON ot.id = c.target_thought_id
+             WHERE nt.created_at > now() - make_interval(days => 7)
+               AND nt.created_at - ot.created_at > make_interval(days => 30)
+             ORDER BY nt.created_at DESC
+             LIMIT 1`
+          );
+
+          const parts: string[] = [];
+          if (rediscovery.rows.length) {
+            const r = rediscovery.rows[0];
+            parts.push(
+              `REDISCOVERY (id ${r.id}, captured ${new Date(r.created_at).toLocaleDateString()}):\n${r.content}`
+            );
+          }
+          if (orphan.rows.length) {
+            const o = orphan.rows[0];
+            parts.push(
+              `ORPHAN (id ${o.id}, captured ${new Date(o.created_at).toLocaleDateString()}, zero connections):\n${o.content}`
+            );
+          }
+          if (recentEcho.rows.length) {
+            const e = recentEcho.rows[0];
+            parts.push(
+              `RECENT ECHO (${e.days_apart} days apart):\n  New (id ${e.new_id}): ${e.new_content}\n  Old (id ${e.old_id}): ${e.old_content}`
+            );
+          }
+
+          if (!parts.length) {
+            return {
+              content: [
+                { type: "text" as const, text: "Nothing to surface yet -- not enough thoughts/connections for a digest." },
+              ],
+            };
+          }
+
+          return { content: [{ type: "text" as const, text: parts.join("\n\n") }] };
+        } finally {
+          client.release();
+        }
+      } catch (err: unknown) {
+        return {
+          content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
+          isError: true,
+        };
+      }
+    }
+  );
+
+  server.registerTool(
+    "weekly_review",
+    {
+      title: "Weekly Review",
+      description:
+        "Return raw activity data for a time window: new thoughts by type/topic, new connections created, stale candidates, and top entities mentioned. " +
+        "Delegate synthesis to a fresh Haiku subagent: give it this data and have it write the narrative review. It should stick to what the evidence supports and flag gaps rather than filling them in.",
+      annotations: {
+        readOnlyHint: true,
+      },
+      inputSchema: {
+        days: z.number().optional().default(7),
+      },
+    },
+    async ({ days }) => {
+      try {
+        const client = await pool.connect();
+        try {
+          const newThoughts = await client.queryObject<{
+            id: string;
+            content: string;
+            metadata: Record<string, unknown>;
+            created_at: string;
+          }>(
+            `SELECT id, content, metadata, created_at
+             FROM thoughts
+             WHERE created_at > now() - make_interval(days => $1::int)
+             ORDER BY created_at DESC`,
+            [days]
+          );
+
+          const newConnections = await client.queryObject<{
+            source_thought_id: string;
+            target_thought_id: string;
+            link_type: string;
+          }>(
+            `SELECT source_thought_id, target_thought_id, link_type
+             FROM thought_connections
+             WHERE created_at > now() - make_interval(days => $1::int)`,
+            [days]
+          );
+
+          const staleCandidates = await client.queryObject<{ id: string; content: string; connection_count: number }>(
+            `SELECT t.id, t.content, COUNT(c.id)::int AS connection_count
+             FROM thoughts t
+             LEFT JOIN thought_connections c ON c.source_thought_id = t.id OR c.target_thought_id = t.id
+             WHERE t.created_at < now() - make_interval(days => 90)
+             GROUP BY t.id, t.content
+             HAVING COUNT(c.id) < 1
+             ORDER BY t.id
+             LIMIT 10`
+          );
+
+          const topEntities = await client.queryObject<{ name: string; mention_count: number }>(
+            `SELECT e.name, COUNT(*)::int AS mention_count
+             FROM thought_entities te
+             JOIN entities e ON e.id = te.entity_id
+             JOIN thoughts t ON t.id = te.thought_id
+             WHERE t.created_at > now() - make_interval(days => $1::int)
+             GROUP BY e.name
+             ORDER BY mention_count DESC
+             LIMIT 10`,
+            [days]
+          );
+
+          const types: Record<string, number> = {};
+          const topics: Record<string, number> = {};
+          for (const t of newThoughts.rows) {
+            const m = t.metadata || {};
+            if (m.type) types[m.type as string] = (types[m.type as string] || 0) + 1;
+            if (Array.isArray(m.topics))
+              for (const tp of m.topics) topics[tp as string] = (topics[tp as string] || 0) + 1;
+          }
+
+          const payload = {
+            window_days: days,
+            new_thought_count: newThoughts.rows.length,
+            types,
+            topics,
+            new_connections: newConnections.rows,
+            stale_candidates: staleCandidates.rows,
+            top_entities_this_window: topEntities.rows,
+            thoughts: newThoughts.rows.map((t) => ({
+              id: t.id,
+              content: t.content,
+              metadata: t.metadata,
+              created_at: t.created_at,
+            })),
+          };
+
+          return { content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }] };
+        } finally {
+          client.release();
+        }
+      } catch (err: unknown) {
+        return {
+          content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
+          isError: true,
+        };
+      }
+    }
+  );
+
+  server.registerTool(
+    "analyze",
+    {
+      title: "Analyze Graph",
+      description:
+        "Live-computed stats about the connection graph: total connections, most-connected thoughts, link type distribution, most-mentioned entities, and most-common entity co-occurrence pairs.",
+      annotations: {
+        readOnlyHint: true,
+      },
+      inputSchema: {},
+    },
+    async () => {
+      try {
+        const client = await pool.connect();
+        try {
+          const totals = await client.queryObject<{ total_connections: number; total_entities: number }>(
+            `SELECT
+               (SELECT COUNT(*)::int FROM thought_connections) AS total_connections,
+               (SELECT COUNT(*)::int FROM entities) AS total_entities`
+          );
+
+          const hubs = await client.queryObject<{ id: string; content: string; connection_count: number }>(
+            `SELECT t.id, t.content, COUNT(c.id)::int AS connection_count
+             FROM thoughts t
+             JOIN thought_connections c ON c.source_thought_id = t.id OR c.target_thought_id = t.id
+             GROUP BY t.id, t.content
+             ORDER BY connection_count DESC
+             LIMIT 5`
+          );
+
+          const linkTypes = await client.queryObject<{ link_type: string; count: number }>(
+            `SELECT link_type, COUNT(*)::int AS count
+             FROM thought_connections
+             GROUP BY link_type
+             ORDER BY count DESC`
+          );
+
+          const topEntities = await client.queryObject<{ name: string; type: string | null; mention_count: number }>(
+            `SELECT name, type, mention_count FROM entities ORDER BY mention_count DESC LIMIT 10`
+          );
+
+          const coOccurrence = await client.queryObject<{ entity_a: string; entity_b: string; co_count: number }>(
+            `SELECT ea.name AS entity_a, eb.name AS entity_b, COUNT(*)::int AS co_count
+             FROM thought_entities tea
+             JOIN thought_entities teb ON teb.thought_id = tea.thought_id AND teb.entity_id > tea.entity_id
+             JOIN entities ea ON ea.id = tea.entity_id
+             JOIN entities eb ON eb.id = teb.entity_id
+             GROUP BY ea.name, eb.name
+             ORDER BY co_count DESC
+             LIMIT 5`
+          );
+
+          const lines: string[] = [
+            `Total connections: ${totals.rows[0]?.total_connections ?? 0}`,
+            `Total entities: ${totals.rows[0]?.total_entities ?? 0}`,
+            "",
+            "Link type distribution:",
+            ...linkTypes.rows.map((l) => `  ${l.link_type}: ${l.count}`),
+          ];
+
+          if (hubs.rows.length) {
+            lines.push("", "Most-connected thoughts:");
+            for (const h of hubs.rows) lines.push(`  (id ${h.id}, ${h.connection_count} connections) ${h.content.slice(0, 80)}`);
+          }
+
+          if (topEntities.rows.length) {
+            lines.push("", "Top entities:");
+            for (const e of topEntities.rows) lines.push(`  ${e.name} (${e.type || "unknown"}): ${e.mention_count} mentions`);
+          }
+
+          if (coOccurrence.rows.length) {
+            lines.push("", "Most-common entity pairs:");
+            for (const p of coOccurrence.rows) lines.push(`  ${p.entity_a} + ${p.entity_b}: ${p.co_count} thought(s)`);
+          }
+
+          return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+        } finally {
+          client.release();
+        }
+      } catch (err: unknown) {
+        return {
+          content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
+          isError: true,
+        };
+      }
+    }
+  );
+
   return server;
 }
 
