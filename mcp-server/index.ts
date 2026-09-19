@@ -855,6 +855,143 @@ function buildServer(): McpServer {
     }
   );
 
+  server.registerTool(
+    "get_connections",
+    {
+      title: "Get Connections",
+      description:
+        "Show every connection a thought has to other thoughts (typed edges: extends, contradicts, is-evidence-for, supersedes, related, shares_entities), in either direction. Use the id shown in search_thoughts/list_thoughts output.",
+      annotations: {
+        readOnlyHint: true,
+      },
+      inputSchema: {
+        thought_id: z.string().describe("Thought id, as shown in search_thoughts/list_thoughts output"),
+      },
+    },
+    async ({ thought_id }) => {
+      try {
+        const client = await pool.connect();
+        try {
+          const result = await client.queryObject<{
+            other_id: string;
+            other_content: string;
+            link_type: string;
+            similarity: number;
+          }>(
+            `SELECT c.other_id, t.content AS other_content, c.link_type, c.similarity
+             FROM (
+               SELECT target_thought_id AS other_id, link_type, similarity
+               FROM thought_connections WHERE source_thought_id = $1::bigint
+               UNION ALL
+               SELECT source_thought_id AS other_id, link_type, similarity
+               FROM thought_connections WHERE target_thought_id = $1::bigint
+             ) c
+             JOIN thoughts t ON t.id = c.other_id
+             ORDER BY c.similarity DESC`,
+            [thought_id]
+          );
+
+          if (!result.rows.length) {
+            return { content: [{ type: "text" as const, text: `No connections found for thought ${thought_id}.` }] };
+          }
+
+          const lines = result.rows.map(
+            (r, i) =>
+              `${i + 1}. [${r.link_type}] (id ${r.other_id}, ${(r.similarity * 100).toFixed(1)}% similar)\n   ${r.other_content}`
+          );
+
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: `${result.rows.length} connection(s) for thought ${thought_id}:\n\n${lines.join("\n\n")}`,
+              },
+            ],
+          };
+        } finally {
+          client.release();
+        }
+      } catch (err: unknown) {
+        return {
+          content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
+          isError: true,
+        };
+      }
+    }
+  );
+
+  server.registerTool(
+    "list_entities",
+    {
+      title: "List Entities",
+      description:
+        "Browse entities (people/projects/tools/concepts) mentioned across captured thoughts, ordered by how often they're mentioned.",
+      annotations: {
+        readOnlyHint: true,
+      },
+      inputSchema: {
+        type: z.string().optional().describe("Filter by entity type (freeform, e.g. 'person', 'project')"),
+        limit: z.number().optional().default(20),
+      },
+    },
+    async ({ type, limit }) => {
+      try {
+        const client = await pool.connect();
+        try {
+          const conditions: string[] = [];
+          const params: unknown[] = [];
+          let paramIdx = 1;
+          if (type) {
+            conditions.push(`lower(type) = lower($${paramIdx})`);
+            params.push(type);
+            paramIdx++;
+          }
+          const whereClause = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+
+          const result = await client.queryObject<{
+            id: string;
+            name: string;
+            type: string | null;
+            mention_count: number;
+            last_seen_at: string;
+          }>(
+            `SELECT id, name, type, mention_count, last_seen_at
+             FROM entities
+             ${whereClause}
+             ORDER BY mention_count DESC
+             LIMIT $${paramIdx}`,
+            [...params, limit]
+          );
+
+          if (!result.rows.length) {
+            return { content: [{ type: "text" as const, text: "No entities found." }] };
+          }
+
+          const lines = result.rows.map(
+            (e, i) =>
+              `${i + 1}. ${e.name} (${e.type || "unknown type"}) -- mentioned ${e.mention_count}x, last seen ${new Date(e.last_seen_at).toLocaleDateString()}`
+          );
+
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: `${result.rows.length} entit${result.rows.length === 1 ? "y" : "ies"}:\n\n${lines.join("\n")}`,
+              },
+            ],
+          };
+        } finally {
+          client.release();
+        }
+      } catch (err: unknown) {
+        return {
+          content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
+          isError: true,
+        };
+      }
+    }
+  );
+
   return server;
 }
 
