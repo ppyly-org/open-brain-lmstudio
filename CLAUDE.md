@@ -44,20 +44,22 @@ both can pass while the actual feature is broken.
 
 1. `docker build -t <name> ./mcp-server` (or `./db`) — catches
    syntax/Dockerfile errors.
-2. `docker run --rm <image> deno check index.ts` — expect exactly 9
+2. `docker run --rm <image> deno check index.ts` — expect exactly 22
    pre-existing `implicitAny` warnings, all on the zod-inferred
    destructured params of `registerTool` callbacks (a `deno check`
    quirk without the project's own type inference context, not a real
-   bug — every tool handler has one). More than 9 means your change
-   introduced a real type issue; a different count or new error codes
-   means something regressed.
+   bug — every tool handler has one, across all 13 tools). More than 22
+   means your change introduced a real type issue; a different count or
+   new error codes means something regressed.
 3. For anything touching `mcp-server/index.ts`'s MCP tool logic (not just
    docs), bring up the real stack and hit it with actual `tools/call`
    requests. `capture_thought` and `search_thoughts` need a live LM
-   Studio to test end-to-end, but `list_thoughts`, `update_thought`,
-   `delete_thought`, and `thought_stats` can be fully verified without one
-   — seed a row directly in Postgres and round-trip real MCP JSON-RPC
-   calls over curl:
+   Studio to test end-to-end, but every other tool is Postgres-only and
+   can be fully verified without one — `list_thoughts`, `update_thought`,
+   `delete_thought`, `thought_stats`, `get_connections`, `list_entities`,
+   `review_stale`, `dedup_review`, `serendipity_digest`, `weekly_review`,
+   and `analyze` — seed a row directly in Postgres and round-trip real
+   MCP JSON-RPC calls over curl:
    ```bash
    cp .env.example .env
    # fill in POSTGRES_PASSWORD/MCP_ACCESS_KEY (or run ./setup.sh) and set
@@ -97,11 +99,20 @@ both can pass while the actual feature is broken.
   `/usr/local/share/postgresql/extension/` and
   `/usr/local/lib/postgresql/`. If you bump the Postgres major version,
   re-verify these paths — the `NN` segment is version-specific.
-- **`deno-postgres` (pinned `v0.19.3`) returns `bigint`/`int8` columns as
-  strings**, not JS numbers or native `bigint` (avoids precision loss past
-  `2^53`) — matches `ThoughtMatch.id: string` already in `index.ts`. Any
-  new query touching `thoughts.id` should follow the same pattern: accept
-  the id as a string, bind it with an explicit `::bigint` cast in SQL.
+- **`deno-postgres` (pinned `v0.19.3`) decodes `bigint`/`int8` columns as
+  native JS `BigInt` by default**, not strings or JS numbers. This repo
+  forces string decoding instead, via a Pool-level decoder override —
+  `controls: { decoders: { [Oid.int8]: (value: string) => value } } }` in
+  the `new Pool(...)` call at `mcp-server/index.ts:68`. Every `id: string`
+  assumption in the file (starting with `ThoughtMatch.id: string`) depends
+  on that override being in place: removing it would silently break every
+  id-keyed lookup that compares a decoded id against a string (e.g.
+  `storeConnections`' `Map<string, ...>` keyed by candidate id) with no
+  error anywhere — this happened once already, see git log around
+  2026-09-19 (`fix: decode int8/bigint columns as string, not native
+  BigInt`) for the incident. Any new query touching an `id` column should
+  keep following the existing pattern: accept the id as a string, bind it
+  with an explicit `::bigint` cast in SQL.
 - **LM Studio's OpenAI-compatible server rejects `response_format: {
   type: "json_object" }`** outright with a 400 — it only implements
   `json_schema` and `text`. `extractMetadata` in `index.ts` uses
@@ -120,6 +131,19 @@ both can pass while the actual feature is broken.
   error. Use `deno eval` with its built-in `fetch` for any in-container
   connectivity check (see the README's Troubleshooting section for the
   exact one-liner).
+- **`thought_connections.source_thought_id` is always the newer
+  thought.** Every row is created during a `capture_thought` call,
+  searching among strictly older existing thoughts — `source` is always
+  the thought being captured, `target` is always the pre-existing one.
+  `serendipity_digest`'s recent-echo slot and any future
+  connection-direction logic depends on this holding. Don't create a
+  `thought_connections` row from anywhere else without preserving it.
+- **Entity name matching is case-insensitive at lookup time only**
+  (`WHERE lower(name) = lower($1)` in `resolveEntities`), not enforced
+  by a DB constraint — `entities.name`'s `UNIQUE` constraint is
+  case-sensitive. First-seen casing wins for display. A citext extension
+  would enforce this at the DB level but isn't used here to avoid an
+  extra extension dependency for a single-user-scale edge case.
 
 ## Conventions
 
