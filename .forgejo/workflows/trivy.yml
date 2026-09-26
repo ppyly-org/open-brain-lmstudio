@@ -1,0 +1,48 @@
+---
+# Forgejo Actions port of .github/workflows/trivy.yml
+#
+# DELIVERED DISABLED. Actions are off at the repo level in Forgejo
+# (has_actions=false) and the real triggers below are commented out, so this
+# cannot auto-fire. Uncomment the `pull_request:`/`push:` block to enable.
+#
+# `workflow_dispatch` is ADDED here -- the GitHub original has only
+# `pull_request` + `push`, which gives no way to verify the port manually.
+# Keep it even after enabling the automatic triggers.
+#
+# Runner: `compose` (bare label; `compose:host` is the *registration*
+# string). This workflow runs `docker build`, so it needs the persistent
+# Docker daemon on host compose-2 rather than the ephemeral `k3s` runner.
+name: Trivy vulnerability scan
+"on":
+  workflow_dispatch:
+  # --- enable by uncommenting ---
+  # pull_request:
+  #   branches: [main]
+  # push:
+  #   branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  trivy:
+    name: Scan ${{ matrix.image }} image
+    runs-on: compose
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [db, mcp-server]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build ${{ matrix.image }} image
+        run: docker build -t open-brain-lmstudio-${{ matrix.image }}:scan ./${{ matrix.image }}
+
+      - name: Scan ${{ matrix.image }} image
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: open-brain-lmstudio-${{ matrix.image }}:scan
+          scan-type: image
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
